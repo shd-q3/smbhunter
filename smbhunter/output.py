@@ -295,7 +295,7 @@ def write_csv_report(path, results):
                           "size", "mtime", "content_summary"])
         for r in results:
             content = "; ".join(
-                f"L{h['line_num']}: {h['match']}" for h in r.get("content_hits", [])
+                f"L{h['line_num']}: {h['line']}" for h in r.get("content_hits", [])
             )[:300]
             writer.writerow([
                 r["host"], r["share"], r["path"], r["filename"],

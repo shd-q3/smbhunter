@@ -58,6 +58,7 @@ class SMBHunter:
         self._jsonl_path = None
         self._extra_patterns = getattr(args, "pattern", None) or []
         self._recon_results = []
+        self._seen_files = set()
 
     def _inc_stat(self, key, n=1):
         with self._lock:
@@ -404,10 +405,17 @@ class SMBHunter:
                 "mtime": mtime.isoformat() if mtime else None,
                 "tier": tier,
                 "content_hits": [
-                    {"tier": t, "line": l, "line_num": ln, "match": m}
+                    {"tier": t, "line": l, "line_num": ln, "pattern": m}
                     for t, m, ln, l in content_hits
                 ],
             }
+
+            dedup_key = (host, name, size,
+                         int(mtime.timestamp()) if mtime else 0)
+            if dedup_key in self._seen_files:
+                self._inc_stat("deduped_files")
+                continue
+            self._seen_files.add(dedup_key)
 
             self._add_result(finding)
             log.info("%s [%s] %s — %s (%s)", host, share, full_path, tier,
