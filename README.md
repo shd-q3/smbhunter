@@ -1,102 +1,102 @@
 # smbhunter
 
-Smart SMB share enumerator that combines inventory, content search, and severity classification.
+Fast SMB share enumeration with teeth. Crawls every readable share, classifies files by risk, and greps for hardcoded credentials — so you spend less time sifting and more time pwning.
 
-Crawls accessible SMB shares and classifies every file into a severity tier (CRITICAL / HIGH / MEDIUM / LOW / INFO) based on extension, filename keywords, and content regex. Built for pentesters who need more signal and less noise from share enumeration.
+Think spider_plus meets manspider meets snaffler, in one `pip install`.
 
-## Features
+## Why
 
-- **Tiered severity** — files ranked by risk: private keys and credential stores at the top, office docs and logs at the bottom
-- **Content search** — downloads small text files and greps for hardcoded passwords, API keys, connection strings, tokens (AWS, GitHub, Stripe, Vault, etc.)
-- **Date-aware recursion** — `--after` skips old files and prunes year-named directories (e.g. `\2019\`)
-- **Windows noise suppression** — ADMIN$ and C$ system paths automatically demoted to INFO
-- **SMB signing detection** — reports signing status per host
-- **Audit logging** — full timestamped log for engagement evidence
-- **Rate limiting** — `--delay` throttles file operations to avoid impacting production servers
-- **Reconnect** — recovers from dropped SMB sessions mid-scan
+Share enumeration during an engagement usually means:
+1. Spider everything → drown in 50k files
+2. Manually grep for passwords → miss half of them
+3. Ignore low-tier noise → miss the `.env` with `DB_PASS=` inside
 
-## Install
+smbhunter fixes all three. Every file gets a severity tier. Content search catches what filenames don't. System noise gets killed before you see it.
+
+## Quick start
 
 ```bash
 pip install .
+smbhunter dc01.corp.local -u svc.audit -p 'Aud1t!' -d CORP --content -o loot.json
 ```
 
-Or editable for development:
+## What it does
 
-```bash
-pip install -e .
-```
+**Severity tiers** — CRITICAL down to INFO based on extension, filename keywords, and content patterns. Private keys and KeePass databases float to the top. Office docs and logs sink to the bottom.
 
-Requires Python 3.10+ and [impacket](https://github.com/fortra/impacket).
+**Content grep** — Downloads small text files and matches against ~30 credential patterns: connection strings, `net use` creds, AWS keys, GitHub PATs, Vault tokens, cpassword, docker-compose secrets, and more.
+
+**Date filtering** — `--after 2024-01-01` skips stale files and prunes year-named directories like `\2019\`.
+
+**Noise suppression** — ADMIN$ is fully suppressed. C$ system paths (Windows, Program Files, WinSxS, etc.) are demoted to INFO. No more scrolling past 10k DLL manifests.
+
+**SMB signing** — Reports signing status per host. Free finding for the report.
+
+**Audit trail** — `--logfile` writes a timestamped log of every action. `--delay` throttles requests for production environments.
+
+**Reconnect** — Recovers from dropped SMB sessions mid-scan without losing progress.
 
 ## Usage
 
 ```bash
-# Basic scan
-smbhunter 10.0.0.5 -u admin -p 'Pass123!' -d CORP
+# Scan with content search
+smbhunter 10.0.0.0/24 -u admin -p pass -d CORP --content
 
-# With content search and date filter
-smbhunter targets.txt -u admin -p 'Pass123!' -d CORP --after 2025-01-01 --content
+# Hash auth
+smbhunter dc01 -u admin -H aad3b435b51404eeaad3b435b51404ee:hash -d CORP
 
-# NTLM hash authentication
-smbhunter 10.0.0.5 -u admin -H aad3b435b51404eeaad3b435b51404ee:ntlmhash -d CORP
+# Target specific shares
+smbhunter dc01 -u admin -p pass -d CORP --shares NETLOGON,SYSVOL --content
 
-# Specific shares only, with audit trail
-smbhunter dc01 -u admin -p pass -d CORP --shares NETLOGON,SYSVOL --content --logfile scan.log -o report.json
-
-# Production-safe with rate limiting
+# Production-safe: 100ms delay, full audit log
 smbhunter targets.txt -u svc.audit -p pass -d CORP --content --delay 100 --logfile audit.log -o findings.json
+
+# Only show high-value stuff
+smbhunter dc01 -u admin -p pass -d CORP --min-tier HIGH --content
 ```
 
 ## Options
 
 ```
-targets                     single host/IP or file with one host per line
+targets                     host, IP, or file (one per line)
 
-Authentication:
-  -u, --username            username
-  -p, --password            password
-  -H, --hash                NTLM hash (LM:NT format)
-  -d, --domain              domain (default: .)
+-u, --username              auth username
+-p, --password              auth password
+-H, --hash                  NTLM hash (LM:NT)
+-d, --domain                domain (default: .)
 
-Filters:
-  --after YYYY-MM-DD        skip files modified before this date
-  --min-tier TIER           minimum severity to display (default: LOW)
-  --depth N                 max directory recursion depth (default: 10)
-  --max-size N              skip files larger than N MB (default: 50)
-  --exclude-dirs DIR...     additional directory names to skip
-
-Scanning:
-  --content                 download + grep small text files for credentials
-  --shares SHARE1,SHARE2   only scan these shares
-  --delay MS                delay between file operations in ms (default: 0)
-  -t, --threads N           parallel host threads (default: 5)
-  --timeout N               SMB connection timeout seconds (default: 5)
-
-Output:
-  -o, --output FILE         write JSON report to FILE
-  --logfile FILE            write detailed log to FILE
-  --debug                   enable debug-level logging
+--after YYYY-MM-DD          skip files older than this
+--min-tier TIER             display threshold (default: LOW)
+--depth N                   max recursion (default: 10)
+--max-size N                skip files > N MB (default: 50)
+--content                   grep files for credential patterns
+--shares S1,S2              limit to specific shares
+--delay MS                  throttle between file ops (ms)
+-t N                        host threads (default: 5)
+-o FILE                     JSON report output
+--logfile FILE              audit log output
+--debug                     verbose logging
 ```
 
-## Severity Tiers
+## Tiers
 
-| Tier | Examples |
-|------|----------|
-| CRITICAL | `.kdbx`, `.pem`, `.pfx`, `password` in filename, `cpassword` in content |
-| HIGH | `.ps1`, `.bat`, `token` in filename, API keys in content |
-| MEDIUM | `.config`, `.env`, `.sql`, `admin`/`vpn` in filename |
+| Tier | What triggers it |
+|------|-----------------|
+| CRITICAL | `.kdbx`, `.pem`, `.pfx`, `password`/`cpassword` in name, creds in content |
+| HIGH | `.ps1`, `.bat`, `token`/`apikey` in name, API keys in content |
+| MEDIUM | `.config`, `.env`, `.sql`, `.bak`, `admin`/`vpn` in name |
 | LOW | `.xlsx`, `.pdf`, `.txt`, `.zip` |
-| INFO | System noise, unclassified files |
+| INFO | OS noise, unclassified |
 
-## JSON Report
+## Install
 
-The `-o` flag produces a structured JSON report containing:
+```bash
+git clone https://github.com/shd-q3/smbhunter.git
+cd smbhunter
+pip install .
+```
 
-- Scan metadata (time, targets, filters)
-- Statistics (shares, files, skipped items)
-- All findings with tier, path, size, mtime, and content matches
-- Errors (failed connections, dropped sessions)
+Needs Python 3.10+ and [impacket](https://github.com/fortra/impacket).
 
 ## License
 
