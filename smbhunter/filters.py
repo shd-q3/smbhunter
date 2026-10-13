@@ -28,7 +28,6 @@ SKIP_DIRS = {
 }
 
 # ── Path segments indicating Windows OS noise ──────────────────────────────
-# Keyword matches inside these paths are demoted to INFO.
 
 SYSTEM_NOISE_PATHS = {
     "\\windows\\", "\\system32\\", "\\syswow64\\", "\\winsxs\\",
@@ -80,12 +79,30 @@ def classify_file(filename, path, share=""):
     return INFO
 
 
-def match_content(text):
-    """Return list of (tier, pattern, line_num, line_text) matches."""
-    hits = []
+def match_content(text, extra_patterns=None):
+    """Return deduped list of (tier, pattern, line_num, line_text) matches.
+
+    Each line appears at most once, at the highest matched tier.
+    """
+    hits = {}
     for line_num, line in enumerate(text.splitlines(), 1):
         for tier in (CRITICAL, HIGH):
             for pattern in CONTENT_PATTERNS[tier]:
                 if re.search(pattern, line, re.IGNORECASE):
-                    hits.append((tier, pattern, line_num, line.strip()[:200]))
-    return hits
+                    if line_num not in hits or \
+                            ALL_TIERS.index(tier) < ALL_TIERS.index(hits[line_num][0]):
+                        hits[line_num] = (tier, pattern, line_num, line.strip()[:200])
+
+    if extra_patterns:
+        for line_num, line in enumerate(text.splitlines(), 1):
+            for pattern in extra_patterns:
+                try:
+                    if re.search(pattern, line, re.IGNORECASE):
+                        tier = HIGH
+                        if line_num not in hits or \
+                                ALL_TIERS.index(tier) < ALL_TIERS.index(hits[line_num][0]):
+                            hits[line_num] = (tier, pattern, line_num, line.strip()[:200])
+                except re.error:
+                    pass
+
+    return sorted(hits.values(), key=lambda x: x[2])
