@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smbhunter"
-version = "0.4.0"
+version = "0.4.1"
 description = "Smart SMB share enumerator — tiered severity, date-aware recursion, content search"
 readme = "README.md"
 license = "MIT"

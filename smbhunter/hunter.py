@@ -81,10 +81,18 @@ class SMBHunter:
             self.results.append(finding)
         self._stream_finding(finding)
 
+    @staticmethod
+    def _sanitise_error(msg):
+        msg = str(msg).split("\n")[0][:200]
+        msg = re.sub(r'(password|passwd|pwd)\s*[=:]\s*\S+', r'\1=<REDACTED>', msg, flags=re.I)
+        msg = re.sub(r'[0-9a-fA-F]{32}:[0-9a-fA-F]{32}', '<HASH_REDACTED>', msg)
+        return msg
+
     def _add_error(self, host, share, error):
+        safe = self._sanitise_error(error)
         with self._lock:
-            self.errors.append({"host": host, "share": share or "", "error": str(error)})
-        log.error("%s [%s] %s", host, share or "-", error)
+            self.errors.append({"host": host, "share": share or "", "error": safe})
+        log.error("%s [%s] %s", host, share or "-", safe)
 
     def _stream_finding(self, finding):
         if not self._jsonl_path:
@@ -166,7 +174,7 @@ class SMBHunter:
                 conn.login(self.args.username, self.args.password, self.args.domain)
             return conn
         except Exception as e:
-            print(f"  [-] {host}: connection failed — {e}", flush=True)
+            print(f"  [-] {host}: connection failed — {self._sanitise_error(e)}", flush=True)
             return None
 
     def list_shares(self, conn):
@@ -199,10 +207,13 @@ class SMBHunter:
         try:
             buf = BytesIO(b"")
             conn.putFile(share, test_file, buf.read)
-            conn.deleteFile(share, test_file)
-            return True
         except Exception:
             return False
+        try:
+            conn.deleteFile(share, test_file)
+        except Exception:
+            log.warning("Write test file left on %s — delete failed", share)
+        return True
 
     def _count_root_items(self, conn, share):
         try:
@@ -346,7 +357,7 @@ class SMBHunter:
     # ── Directory spider ────────────────────────────────────────────────────
 
     def spider_dir(self, conn, host, share, path, depth):
-        if depth > self.args.depth:
+        if depth >= self.args.depth:
             return conn
 
         try:
@@ -396,7 +407,7 @@ class SMBHunter:
                         pass
 
                 if self.args.exclude_dirs:
-                    if any(ex.lower() in name_lower for ex in self.args.exclude_dirs):
+                    if name_lower in {ex.lower() for ex in self.args.exclude_dirs}:
                         self._inc_stat("skipped_dirs")
                         continue
 
@@ -452,12 +463,17 @@ class SMBHunter:
                 ],
             }
 
-            dedup_key = (host, name, size,
+            dedup_key = (host, share, full_path, size,
                          int(mtime.timestamp()) if mtime else 0)
-            if dedup_key in self._seen_files:
-                self._inc_stat("deduped_files")
+            with self._lock:
+                if dedup_key in self._seen_files:
+                    self.stats["deduped_files"] += 1
+                    is_dup = True
+                else:
+                    self._seen_files.add(dedup_key)
+                    is_dup = False
+            if is_dup:
                 continue
-            self._seen_files.add(dedup_key)
 
             self._add_result(finding)
             log.info("%s [%s] %s — %s (%s)", host, share, full_path, tier,
@@ -501,17 +517,24 @@ class SMBHunter:
                         f.write(b'\x00' * sz)
                     os.unlink(tmp_path)
                 except OSError:
-                    pass
+                    log.warning("Failed to clean up temp file: %s", tmp_path)
 
     # ── Loot download ──────────────────────────────────────────────────────
 
     def _loot_file(self, conn, share, path, host, filename):
         loot_base = self.args.loot
         safe_host = host.replace(":", "_")
+        safe_name = os.path.basename(filename.replace("\\", "/"))
+        if not safe_name or safe_name in (".", ".."):
+            return
         rel_dir = os.path.dirname(path.replace("\\", os.sep).lstrip(os.sep))
         full_dir = os.path.join(loot_base, safe_host, share, rel_dir)
         os.makedirs(full_dir, exist_ok=True)
-        local_path = os.path.join(full_dir, filename)
+        local_path = os.path.join(full_dir, safe_name)
+        resolved = os.path.realpath(local_path)
+        if not resolved.startswith(os.path.realpath(loot_base)):
+            log.warning("Path traversal blocked: %s", filename)
+            return
         try:
             with open(local_path, "wb") as f:
                 conn.getFile(share, path, f.write)

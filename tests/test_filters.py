@@ -97,8 +97,11 @@ class TestClassifyFile:
     def test_c_dollar_system_path_demoted(self):
         assert classify_file("deploy.ps1", "Windows\\System32\\deploy.ps1", "C$") == INFO
 
-    def test_admin_dollar_always_info(self):
-        assert classify_file("passwords.kdbx", "\\passwords.kdbx", "ADMIN$") == INFO
+    def test_admin_dollar_demotes_keyword_to_info(self):
+        assert classify_file("password_list.txt", "\\password_list.txt", "ADMIN$") == INFO
+
+    def test_admin_dollar_preserves_critical_ext(self):
+        assert classify_file("data.kdbx", "\\data.kdbx", "ADMIN$") == CRITICAL
 
     def test_named_share_not_demoted(self):
         assert classify_file("collect.ps1", "\\Scripts\\collect.ps1", "IT-Dept") == HIGH

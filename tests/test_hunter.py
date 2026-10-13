@@ -179,7 +179,7 @@ class TestFileDedup:
     def test_dedup_key_blocks_duplicate(self):
         h = SMBHunter(_base_args(min_tier="INFO"))
         mtime_dt = datetime(2024, 6, 15, tzinfo=timezone.utc)
-        key = ("10.0.0.1", "deploy.ps1", 1024, int(mtime_dt.timestamp()))
+        key = ("10.0.0.1", "IT-Dept", "\\deploy.ps1", 1024, int(mtime_dt.timestamp()))
         h._seen_files.add(key)
         assert key in h._seen_files
         h._seen_files.add(key)
@@ -187,16 +187,24 @@ class TestFileDedup:
 
     def test_different_hosts_not_deduped(self):
         h = SMBHunter(_base_args())
-        k1 = ("10.0.0.1", "deploy.ps1", 1024, 1700000000)
-        k2 = ("10.0.0.2", "deploy.ps1", 1024, 1700000000)
+        k1 = ("10.0.0.1", "IT-Dept", "\\deploy.ps1", 1024, 1700000000)
+        k2 = ("10.0.0.2", "IT-Dept", "\\deploy.ps1", 1024, 1700000000)
         h._seen_files.add(k1)
         h._seen_files.add(k2)
         assert len(h._seen_files) == 2
 
     def test_different_sizes_not_deduped(self):
         h = SMBHunter(_base_args())
-        k1 = ("10.0.0.1", "deploy.ps1", 1024, 1700000000)
-        k2 = ("10.0.0.1", "deploy.ps1", 2048, 1700000000)
+        k1 = ("10.0.0.1", "IT-Dept", "\\deploy.ps1", 1024, 1700000000)
+        k2 = ("10.0.0.1", "IT-Dept", "\\deploy.ps1", 2048, 1700000000)
+        h._seen_files.add(k1)
+        h._seen_files.add(k2)
+        assert len(h._seen_files) == 2
+
+    def test_different_shares_not_deduped(self):
+        h = SMBHunter(_base_args())
+        k1 = ("10.0.0.1", "IT-Dept", "\\config.ini", 512, 1700000000)
+        k2 = ("10.0.0.1", "DevOps", "\\config.ini", 512, 1700000000)
         h._seen_files.add(k1)
         h._seen_files.add(k2)
         assert len(h._seen_files) == 2

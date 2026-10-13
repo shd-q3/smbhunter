@@ -24,7 +24,7 @@ SKIP_DIRS = {
     "microsoft shared", "windowspowershell", "windowsapps",
     "program files", "program files (x86)",
     "microsoft sdks", "reference assemblies",
-    "windowspowershell\\v1.0", "media",
+    "v1.0", "media",
 }
 
 # ── Path segments indicating Windows OS noise ──────────────────────────────
@@ -67,7 +67,8 @@ def classify_file(filename, path, share=""):
 
     for tier in (CRITICAL, HIGH, MEDIUM):
         for kw in KEYWORD_TIERS[tier]:
-            if kw in name_lower or kw in full_lower:
+            if re.search(r'(?:^|[\W_])' + re.escape(kw) + r'(?:[\W_]|$)', name_lower) or \
+               re.search(r'(?:^|[\W_])' + re.escape(kw) + r'(?:[\W_]|$)', full_lower):
                 return INFO if noisy else tier
 
     for tier in (CRITICAL, HIGH, MEDIUM, LOW):
@@ -84,8 +85,11 @@ def match_content(text, extra_patterns=None):
 
     Each line appears at most once, at the highest matched tier.
     """
+    MAX_LINE = 2000
     hits = {}
     for line_num, line in enumerate(text.splitlines(), 1):
+        if len(line) > MAX_LINE:
+            continue
         for tier in (CRITICAL, HIGH):
             for pattern in CONTENT_PATTERNS[tier]:
                 if re.search(pattern, line, re.IGNORECASE):
@@ -95,6 +99,8 @@ def match_content(text, extra_patterns=None):
 
     if extra_patterns:
         for line_num, line in enumerate(text.splitlines(), 1):
+            if len(line) > MAX_LINE:
+                continue
             for pattern in extra_patterns:
                 try:
                     if re.search(pattern, line, re.IGNORECASE):

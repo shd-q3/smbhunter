@@ -2,11 +2,19 @@
 
 import csv
 import json
+import re
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 
 from smbhunter.tiers import COLORS, RESET, ALL_TIERS
+
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
+
+
+def _sanitise(s):
+    """Strip ANSI escapes and control chars from server-supplied strings."""
+    return _ANSI_RE.sub('', str(s)).replace('\r', '').replace('\n', ' ')
 
 # ── Colour helpers ─────────────────────────────────────────────────────────
 
@@ -49,7 +57,7 @@ def human_size(size_bytes):
 # ── Print helpers ──────────────────────────────────────────────────────────
 
 def print_host_header(host):
-    print(f"\n{_c(BOLD, WHITE)}SMB{_r()}  {_c(BOLD)}{host}{_r()}", flush=True)
+    print(f"\n{_c(BOLD, WHITE)}SMB{_r()}  {_c(BOLD)}{_sanitise(host)}{_r()}", flush=True)
 
 
 def print_signing(host, required):
@@ -73,21 +81,23 @@ def print_progress(done, total):
 
 
 def print_share(share, writable=False, show_access=False):
+    safe = _sanitise(share)
     if show_access:
         if writable:
             access = f"{_c(RED, BOLD)}READ/WRITE{_r()}"
         else:
             access = f"{_c(GREEN)}READ{_r()}"
-        print(f"  {_c(GREEN)}[+]{_r()} {_c(BOLD)}{share}{_r()}  {access}", flush=True)
+        print(f"  {_c(GREEN)}[+]{_r()} {_c(BOLD)}{safe}{_r()}  {access}", flush=True)
     else:
-        print(f"  {_c(GREEN)}[+]{_r()} {_c(BOLD)}{share}{_r()}", flush=True)
+        print(f"  {_c(GREEN)}[+]{_r()} {_c(BOLD)}{safe}{_r()}", flush=True)
 
 
 def print_share_warning(share, message, critical=False):
+    safe = _sanitise(share)
     if critical:
-        print(f"  {_c(RED)}[!] {share} — {message}{_r()}", flush=True)
+        print(f"  {_c(RED)}[!] {safe} — {message}{_r()}", flush=True)
     else:
-        print(f"  {_c(YELLOW)}[!] {share} — {message}{_r()}", flush=True)
+        print(f"  {_c(YELLOW)}[!] {safe} — {message}{_r()}", flush=True)
 
 
 def print_finding(host, share, path, tier, size, mtime, content_hits=None):
@@ -97,11 +107,11 @@ def print_finding(host, share, path, tier, size, mtime, content_hits=None):
     sz_str = human_size(size)
     tag = f"{tc}{tier:8s}{r}"
     meta = f"{_c(DIM)}{sz_str}  {dt_str}{_r()}"
-    print(f"    {tag}  {path}  {meta}", flush=True)
+    print(f"    {tag}  {_sanitise(path)}  {meta}", flush=True)
     if content_hits:
         for ct, _pat, lnum, line in content_hits:
             cc = _c(COLORS.get(ct, ""))
-            print(f"    {_c(DIM)}         L{lnum}:{_r()} {cc}{line}{r}", flush=True)
+            print(f"    {_c(DIM)}         L{lnum}:{_r()} {cc}{_sanitise(line)}{r}", flush=True)
 
 
 def print_loot(local_path):
@@ -109,7 +119,7 @@ def print_loot(local_path):
 
 
 def print_recon_share(entry):
-    name = entry["share"]
+    name = _sanitise(entry["share"])
     readable = entry["readable"]
     writable = entry["writable"]
     score = entry["score"]
@@ -187,10 +197,10 @@ def print_summary(elapsed, stats, results, errors, args=None):
     print(f"{_c(BOLD)}Completed{_r()} in {elapsed:.1f}s", flush=True)
 
     writable = stats.get("writable_shares", 0)
-    share_str = f"{stats['readable_shares']} readable"
+    share_str = f"{stats.get('readable_shares', 0)} readable"
     if writable:
         share_str += f" ({_c(RED, BOLD)}{writable} WRITABLE{_r()})"
-    share_str += f", {stats['unreadable_shares']} denied"
+    share_str += f", {stats.get('unreadable_shares', 0)} denied"
     print(f"  Shares:   {share_str}", flush=True)
 
     signing_req = stats.get("signing_required", 0)
@@ -203,13 +213,13 @@ def print_summary(elapsed, stats, results, errors, args=None):
             s_parts.append(f"{_c(YELLOW)}{signing_not} NOT required{_r()}")
         print(f"  Signing:  {', '.join(s_parts)}", flush=True)
 
-    print(f"  Items:    {stats['total_items']} total, "
-          f"{stats['files_seen']} files evaluated", flush=True)
+    print(f"  Items:    {stats.get('total_items', 0)} total, "
+          f"{stats.get('files_seen', 0)} files evaluated", flush=True)
     skip_parts = [
-        f"{stats['skipped_dirs']} dirs",
-        f"{stats['skipped_old_dirs']} old dirs",
-        f"{stats['skipped_old_files']} old files",
-        f"{stats['skipped_large']} oversized",
+        f"{stats.get('skipped_dirs', 0)} dirs",
+        f"{stats.get('skipped_old_dirs', 0)} old dirs",
+        f"{stats.get('skipped_old_files', 0)} old files",
+        f"{stats.get('skipped_large', 0)} oversized",
     ]
     if stats.get("skipped_ext"):
         skip_parts.append(f"{stats['skipped_ext']} by ext")
@@ -318,9 +328,10 @@ def write_csv_report(path, results):
         writer.writerow(["host", "share", "path", "filename", "tier",
                           "size", "mtime", "content_summary"])
         for r in results:
-            content = "; ".join(
+            raw = "; ".join(
                 f"L{h['line_num']}: {h['line']}" for h in r.get("content_hits", [])
-            )[:300]
+            )
+            content = raw[:297] + "..." if len(raw) > 300 else raw
             writer.writerow([
                 r["host"], r["share"], r["path"], r["filename"],
                 r["tier"], r["size"], r["mtime"], content,

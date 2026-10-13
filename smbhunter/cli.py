@@ -101,6 +101,18 @@ examples:
         if not args.password and not args.hash:
             parser.error("-p/--password or -H/--hash required (or use --guest / -k)")
 
+    if args.hash:
+        if ":" not in args.hash:
+            args.hash = f":{args.hash}"
+        parts = args.hash.split(":")
+        if len(parts) != 2:
+            parser.error("--hash must be LM:NT or :NT format")
+
+    if args.depth < 1:
+        parser.error("--depth must be >= 1")
+    if args.threads < 1:
+        parser.error("--threads must be >= 1")
+
     hunter = SMBHunter(args)
     try:
         hunter.run()
