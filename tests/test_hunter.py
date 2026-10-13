@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
 
-from smbhunter.hunter import SMBHunter, INTERESTING_SHARE_NAMES
+from smbhunter.hunter import SMBHunter, INTERESTING_SHARE_NAMES, SMB_DIALECTS
 from smbhunter.tiers import CRITICAL, HIGH, MEDIUM, LOW, INFO
 
 
@@ -18,9 +18,9 @@ def _base_args(**overrides):
         username="admin", password="pass", hash=None, domain=".",
         kerberos=False, dc_ip=None, guest=False,
         after=None, min_tier="LOW", depth=10, max_size=50,
-        exclude_dirs=None, recon=False, content=False,
+        exclude_dirs=None, exclude_ext=None, recon=False, content=False,
         pattern=None, shares=None, loot=None, write_check=False,
-        delay=0, threads=1, timeout=5,
+        delay=0, threads=1, timeout=5, resume=False,
         output=None, csv=None, logfile=None, debug=False,
     )
     defaults.update(overrides)
@@ -334,3 +334,108 @@ class TestStats:
         h._add_error("10.0.0.1", "Share", "timeout")
         assert len(h.errors) == 1
         assert h.errors[0]["error"] == "timeout"
+
+
+# ── SMB dialect detection ─────────────────────────────────────────────────────
+
+class TestGetDialect:
+    def test_smb2(self):
+        conn = MagicMock()
+        conn.getDialect.return_value = 0x0202
+        assert SMBHunter._get_dialect(conn) == "SMB 2.0.2"
+
+    def test_smb3(self):
+        conn = MagicMock()
+        conn.getDialect.return_value = 0x0311
+        assert SMBHunter._get_dialect(conn) == "SMB 3.1.1"
+
+    def test_smb1(self):
+        conn = MagicMock()
+        conn.getDialect.return_value = 0x0002
+        assert SMBHunter._get_dialect(conn) == "SMB1"
+
+    def test_unknown_dialect(self):
+        conn = MagicMock()
+        conn.getDialect.return_value = 0x9999
+        assert SMBHunter._get_dialect(conn) == "0x9999"
+
+    def test_exception(self):
+        conn = MagicMock()
+        conn.getDialect.side_effect = Exception("not supported")
+        assert SMBHunter._get_dialect(conn) is None
+
+    def test_dialect_map_complete(self):
+        expected = {0x0202, 0x0210, 0x0300, 0x0302, 0x0311}
+        assert set(SMB_DIALECTS.keys()) == expected
+
+
+# ── Exclude extension ─────────────────────────────────────────────────────────
+
+class TestExcludeExt:
+    def test_exclude_ext_normalised(self):
+        h = SMBHunter(_base_args(exclude_ext=[".dll", "exe", ".sys"]))
+        assert h._exclude_ext == {".dll", ".exe", ".sys"}
+
+    def test_exclude_ext_empty(self):
+        h = SMBHunter(_base_args(exclude_ext=None))
+        assert h._exclude_ext == set()
+
+    def test_exclude_ext_dot_prefix_added(self):
+        h = SMBHunter(_base_args(exclude_ext=["dll"]))
+        assert ".dll" in h._exclude_ext
+
+
+# ── Progress counter ──────────────────────────────────────────────────────────
+
+class TestProgress:
+    def test_progress_increments(self):
+        h = SMBHunter(_base_args())
+        h._total_hosts = 5
+        h._report_progress()
+        assert h._hosts_done == 1
+        h._report_progress()
+        assert h._hosts_done == 2
+
+    def test_no_progress_for_single_host(self, capsys):
+        h = SMBHunter(_base_args())
+        h._total_hosts = 1
+        h._report_progress()
+        captured = capsys.readouterr()
+        assert "[1/1]" not in captured.out
+
+
+# ── Resume ────────────────────────────────────────────────────────────────────
+
+class TestResume:
+    def test_resume_skips_scanned_hosts(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".jsonl", delete=False
+        ) as f:
+            f.write('{"host":"10.0.0.1","share":"C$","path":"test"}\n')
+            f.write('{"host":"10.0.0.2","share":"Data","path":"test"}\n')
+            jsonl_path = f.name
+
+        json_path = jsonl_path[:-1]
+        try:
+            h = SMBHunter(_base_args(
+                output=json_path, resume=True,
+                targets="10.0.0.1",
+            ))
+            seen = h._load_resume_hosts()
+            assert "10.0.0.1" in seen
+            assert "10.0.0.2" in seen
+            assert "10.0.0.3" not in seen
+        finally:
+            os.unlink(jsonl_path)
+            if os.path.exists(json_path):
+                os.unlink(json_path)
+
+    def test_resume_no_file(self):
+        h = SMBHunter(_base_args(output="/tmp/nonexistent_test.json", resume=True))
+        seen = h._load_resume_hosts()
+        assert len(seen) == 0
+
+    def test_resume_disabled(self):
+        h = SMBHunter(_base_args(output="/tmp/test.json", resume=False))
+        seen = h._load_resume_hosts()
+        assert len(seen) == 0

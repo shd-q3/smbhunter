@@ -12,6 +12,7 @@ import pytest
 from smbhunter.output import (
     human_size, write_json_report, write_csv_report,
     write_json_recon_report, write_csv_recon_report,
+    print_dialect, print_progress,
 )
 from smbhunter.tiers import CRITICAL, HIGH, MEDIUM, LOW, INFO
 
@@ -226,3 +227,30 @@ class TestWriteJsonReconReport:
             assert report["shares"][0]["score"] == 75
         finally:
             os.unlink(path)
+
+
+# ── Dialect and progress output ───────────────────────────────────────────────
+
+class TestPrintDialect:
+    def test_dialect_prints(self, capsys):
+        print_dialect("SMB 3.1.1")
+        out = capsys.readouterr().out
+        assert "SMB 3.1.1" in out
+
+    def test_smbv1_prints(self, capsys):
+        print_dialect("SMB1")
+        out = capsys.readouterr().out
+        assert "SMB1" in out
+
+
+class TestPrintProgress:
+    def test_progress_format(self, capsys):
+        print_progress(5, 20)
+        out = capsys.readouterr().out
+        assert "5/20" in out
+        assert "25%" in out
+
+    def test_progress_complete(self, capsys):
+        print_progress(10, 10)
+        out = capsys.readouterr().out
+        assert "100%" in out

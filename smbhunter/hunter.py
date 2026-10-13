@@ -25,10 +25,18 @@ from smbhunter.filters import (
 from smbhunter.output import (
     print_finding, print_banner, print_summary, supports_color,
     print_share, print_host_header, print_share_warning, print_loot,
-    print_signing, print_recon_share,
+    print_signing, print_recon_share, print_dialect, print_progress,
 )
 
 log = logging.getLogger("smbhunter")
+
+SMB_DIALECTS = {
+    0x0202: "SMB 2.0.2",
+    0x0210: "SMB 2.1",
+    0x0300: "SMB 3.0",
+    0x0302: "SMB 3.0.2",
+    0x0311: "SMB 3.1.1",
+}
 
 INTERESTING_SHARE_NAMES = {
     "it", "admin", "backup", "backups", "deploy", "devops", "dev",
@@ -59,6 +67,10 @@ class SMBHunter:
         self._extra_patterns = getattr(args, "pattern", None) or []
         self._recon_results = []
         self._seen_files = set()
+        self._hosts_done = 0
+        self._total_hosts = 0
+        raw_excl = getattr(args, "exclude_ext", None) or []
+        self._exclude_ext = {e if e.startswith(".") else f".{e}" for e in raw_excl}
 
     def _inc_stat(self, key, n=1):
         with self._lock:
@@ -83,6 +95,21 @@ class SMBHunter:
                     f.write(json.dumps(finding, default=str) + "\n")
             except OSError:
                 pass
+
+    def _report_progress(self):
+        with self._lock:
+            self._hosts_done += 1
+            done = self._hosts_done
+        if self._total_hosts > 1:
+            print_progress(done, self._total_hosts)
+
+    @staticmethod
+    def _get_dialect(conn):
+        try:
+            d = conn.getDialect()
+            return SMB_DIALECTS.get(d, f"SMB1" if d <= 0x00FF else f"0x{d:04x}")
+        except Exception:
+            return None
 
     def _tier_passes(self, tier):
         return ALL_TIERS.index(tier) <= ALL_TIERS.index(self.min_tier)
@@ -235,6 +262,7 @@ class SMBHunter:
         conn = self.connect(host)
         if not conn:
             self._add_error(host, "", "connection failed")
+            self._report_progress()
             return
 
         try:
@@ -243,6 +271,12 @@ class SMBHunter:
             self._inc_stat("signing_required" if signing else "signing_not_required")
         except Exception:
             pass
+
+        dialect = self._get_dialect(conn)
+        if dialect:
+            print_dialect(dialect)
+            if dialect == "SMB1":
+                self._inc_stat("smbv1_hosts")
 
         try:
             hostname = conn.getServerName()
@@ -306,6 +340,8 @@ class SMBHunter:
             conn.logoff()
         except Exception:
             pass
+
+        self._report_progress()
 
     # ── Directory spider ────────────────────────────────────────────────────
 
@@ -378,6 +414,12 @@ class SMBHunter:
             if self.args.max_size and size and size > self.args.max_size * 1024 * 1024:
                 self._inc_stat("skipped_large")
                 continue
+
+            if self._exclude_ext:
+                ext = _get_ext(name.lower())
+                if ext in self._exclude_ext:
+                    self._inc_stat("skipped_ext")
+                    continue
 
             tier = classify_file(name, full_path, share)
 
@@ -486,6 +528,7 @@ class SMBHunter:
         conn = self.connect(host)
         if not conn:
             self._add_error(host, "", "initial connection failed")
+            self._report_progress()
             return
 
         try:
@@ -494,6 +537,12 @@ class SMBHunter:
             self._inc_stat("signing_required" if signing else "signing_not_required")
         except Exception:
             pass
+
+        dialect = self._get_dialect(conn)
+        if dialect:
+            print_dialect(dialect)
+            if dialect == "SMB1":
+                self._inc_stat("smbv1_hosts")
 
         raw_shares = self.list_shares(conn)
         share_names = [s["name"] for s in raw_shares]
@@ -536,6 +585,8 @@ class SMBHunter:
         except Exception:
             pass
 
+        self._report_progress()
+
     # ── Report flushing ────────────────────────────────────────────────────
 
     def flush_reports(self):
@@ -560,6 +611,28 @@ class SMBHunter:
             log.addHandler(fh)
             log.info("smbhunter started — logging to %s", logfile)
 
+    def _load_resume_hosts(self):
+        if not getattr(self.args, "resume", False) or not self.args.output:
+            return set()
+        jsonl = self.args.output + "l"
+        if not os.path.isfile(jsonl):
+            return set()
+        seen = set()
+        try:
+            with open(jsonl) as f:
+                for line in f:
+                    try:
+                        seen.add(json.loads(line)["host"])
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+        except OSError:
+            pass
+        if seen:
+            log.info("Resume: skipping %d already-scanned hosts", len(seen))
+            print(f"  resuming — {len(seen)} hosts already in JSONL, skipping",
+                  flush=True)
+        return seen
+
     def run(self):
         self._setup_logging()
         hosts = self._expand_targets()
@@ -567,7 +640,12 @@ class SMBHunter:
         if self.args.output:
             self._jsonl_path = self.args.output + "l"
 
+        resume_hosts = self._load_resume_hosts()
+        if resume_hosts:
+            hosts = [h for h in hosts if h not in resume_hosts]
+
         recon_mode = getattr(self.args, "recon", False)
+        self._total_hosts = len(hosts)
 
         log.info("Targets: %d, mode=%s, content=%s, min_tier=%s, depth=%d",
                  len(hosts), "recon" if recon_mode else "hunt",

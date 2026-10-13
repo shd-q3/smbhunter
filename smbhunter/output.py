@@ -59,6 +59,19 @@ def print_signing(host, required):
         print(f"  {_c(YELLOW)}signing:{_r()} {_c(YELLOW)}NOT required{_r()}", flush=True)
 
 
+def print_dialect(dialect):
+    if dialect == "SMB1":
+        print(f"  {_c(RED)}dialect:{_r()} {_c(RED, BOLD)}{dialect}{_r()}", flush=True)
+    else:
+        print(f"  {_c(GREY)}dialect:{_r()} {dialect}", flush=True)
+
+
+def print_progress(done, total):
+    pct = done * 100 // total
+    print(f"\r{_c(DIM)}[{done}/{total}] {pct}% hosts complete{_r()}",
+          end="\n" if done == total else "", flush=True)
+
+
 def print_share(share, writable=False, show_access=False):
     if show_access:
         if writable:
@@ -138,7 +151,8 @@ def print_recon_share(entry):
 def print_banner(host_count, args):
     recon = getattr(args, "recon", False)
     mode = "RECON" if recon else "HUNT"
-    print(f"\n{_c(BOLD, CYAN)}smbhunter{_r()} {_c(DIM)}v0.3.0{_r()}"
+    from smbhunter import __version__
+    print(f"\n{_c(BOLD, CYAN)}smbhunter{_r()} {_c(DIM)}v{__version__}{_r()}"
           f"  {_c(BOLD)}{mode}{_r()}"
           f"  {_c(DIM)}{host_count} target(s){_r()}", flush=True)
 
@@ -191,10 +205,20 @@ def print_summary(elapsed, stats, results, errors, args=None):
 
     print(f"  Items:    {stats['total_items']} total, "
           f"{stats['files_seen']} files evaluated", flush=True)
-    print(f"  Skipped:  {stats['skipped_dirs']} dirs, "
-          f"{stats['skipped_old_dirs']} old dirs, "
-          f"{stats['skipped_old_files']} old files, "
-          f"{stats['skipped_large']} oversized", flush=True)
+    skip_parts = [
+        f"{stats['skipped_dirs']} dirs",
+        f"{stats['skipped_old_dirs']} old dirs",
+        f"{stats['skipped_old_files']} old files",
+        f"{stats['skipped_large']} oversized",
+    ]
+    if stats.get("skipped_ext"):
+        skip_parts.append(f"{stats['skipped_ext']} by ext")
+    print(f"  Skipped:  {', '.join(skip_parts)}", flush=True)
+    if stats.get("deduped_files"):
+        print(f"  Deduped:  {stats['deduped_files']} cross-share duplicates", flush=True)
+    smbv1 = stats.get("smbv1_hosts", 0)
+    if smbv1:
+        print(f"  {_c(RED, BOLD)}SMBv1:    {smbv1} host(s) — consider reporting{_r()}", flush=True)
 
     tier_counts = defaultdict(int)
     for r in results:

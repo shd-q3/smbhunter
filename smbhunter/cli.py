@@ -53,6 +53,8 @@ examples:
                       help="skip files larger than N MB (default: 50)")
     filt.add_argument("--exclude-dirs", nargs="*", default=None, dest="exclude_dirs",
                       metavar="DIR", help="additional directory names to skip")
+    filt.add_argument("--exclude-ext", nargs="*", default=None, dest="exclude_ext",
+                      metavar="EXT", help="skip files with these extensions (e.g. .dll .exe)")
 
     scan = parser.add_argument_group("scanning")
     scan.add_argument("--recon", action="store_true",
@@ -73,6 +75,8 @@ examples:
                       help="parallel host threads (default: 5)")
     scan.add_argument("--timeout", type=int, default=5,
                       help="SMB connection timeout seconds (default: 5)")
+    scan.add_argument("--resume", action="store_true",
+                      help="skip hosts already in the JSONL stream (requires -o)")
 
     out = parser.add_argument_group("output")
     out.add_argument("-o", "--output", default=None, metavar="FILE",
